@@ -1,0 +1,192 @@
+---
+title: "Project1"
+format: html
+editor: visual
+---
+
+## Annie DiFrank 
+
+```{r setup, include=FALSE}
+#this chunk is just to install/load needed packages 
+knitr::opts_chunk$set(echo = TRUE)
+
+# Use pacman to check whether packages are installed, if not load them
+if (!require("pacman")) install.packages("pacman")
+library(pacman)
+pacman::p_load(tidycensus,
+ dplyr,
+ tidyverse,
+ httr,
+ jsonlite)
+
+```
+
+# Part 1: Data Processing
+
+### In this section, we will query the API and return a nicely formatted tibble.
+
+Process:
+
+-   Build the appropriate URL
+
+-   Use httr:get() to contact the website
+
+-   Write a function to parse the data and put it into a tibble for ease
+
+```{r}
+#Build the URL 
+pums_url<- "api.census.gov/data/2022/acs/acs1/pums?get=SEX,PWGTP,MAR&SCHL=24"
+#Get the URL data by contacting the website 
+url_info<- httr::GET(pums_url)
+str(url_info,max.level=1)
+
+#Helper function to take output from GET() and turn it into a tibble 
+get_tibble<- function(url_info) {
+  #Parse the content
+  parsed<- fromJSON(rawToChar(url_info$content))
+  tibble_data<- as_tibble(parsed)
+  
+  #set the first row to the names of the columns 
+  names(tibble_data) <- as.character(unlist(tibble_data[1,]))
+  #remove the old first row 
+  tibble_data<-tibble_data[-1,]
+  
+  return(tibble_data)
+}
+#testing function 
+test<- get_tibble(url_info = url_info)
+
+```
+
+### In this section, we will write a function that allows users to query the API and change modifiers 
+
+```{r}
+query_pums <- function(
+  year = 2022,
+  numeric_vars = c("AGEP", "PWGTP"),
+  categorical_vars = c("SEX"),
+  geography_level = "All",
+  geography_filter_value = NULL
+) {
+  # Validate the year
+  if (!(year %in% 2010:2022)) {
+    stop("Year must be between 2010 and 2022")
+  }
+  
+    # defining the numeric and categorical variable options
+    num_var_options <-
+      c("AGEP", "GASP", "GRPIP", "JWAP", "JWDP", "JWMNP")
+    cat_var_options <-
+      c("FER",
+        "HHL",
+        "HISPEED",
+        "JWAP",
+        "JWDP",
+        "JWTRNS",
+        "SCH",
+        "SCHL",
+        "SEX")
+    
+    # making sure the variables asked for are in this set of variables 
+      if (any(!numeric_vars %in% num_var_options)) {
+    stop("Invalid numeric variables provided")
+      }
+    
+    # making sure one numeric variable other than PWGTP is included
+if (length(numeric_vars) < 1) {
+    stop("At least one numeric variable other than PWGTP must be provided")
+}
+        
+   # making sure the variables asked for are in this set of variables 
+    if (any(!categorical_vars %in% cat_var_options)) {
+    stop("Invalid categorical variables provided")
+    }
+  
+    # making sure at least one categorical variable is provided
+  if (length(categorical_vars) < 1) {
+    stop("At least one categorical variable must be provided")
+  } 
+  
+  # specifying the geographic level
+  valid_geo_levels <- c("All", "Region", "Division", "State")
+  if (!(geography_level %in% valid_geo_levels)) {
+    stop("Geography level is invalid")
+  }
+  
+  # making the API request- setting the base of the url
+  base_url <- "https://api.census.gov/data"
+  api_url <- paste0(base_url, "/", as.character(year), "acs/acs1/pums")
+  
+  # Construct API parameters
+  params <- list(
+    get = paste(c(numeric_vars, categorical_vars), collapse = ",")
+  )
+  
+  # Setting geography parameter
+  if (geography_level == "All") {
+    params$geo_level <- "us:*"
+  } else if (geography_level == "Region") {
+    params$geo_level <- "region:*"
+  } else if (geography_level == "Division") {
+    params$geo_level <- "division:*"
+  } else if (geography_level == "State") {
+    params$geo_level <- "state:*"
+  }
+  
+    # Add geography filter if specified
+  if (!is.null(geography_filter_value)) {
+    params$geo_level <- geography_filter_value
+  }
+  
+  # Print params for debugging
+  api_url <- paste0("https://api.census.gov/data/", year, "/acs/acs1/pums")
+  print("API URL:")
+  print(api_url)
+  print("API parameters:")
+  print(params)
+  
+  # API URL
+  api_url <- paste0("https://api.census.gov/data/", year, "/acs/acs1/pums")
+  
+  # Query the API
+  response <- GET(api_url, query = params)
+  
+    raw_response <- content(response, as = "text")
+  print("Raw API response:")
+  print(raw_response)
+  
+  # Parse response
+  data <- content(response, as = "text") %>%
+    fromJSON(flatten = TRUE) %>%
+    as_tibble()
+  
+      # convert numeric variables to numeric values
+    num_vars_tibble <- intersect(numeric_vars, names(data))
+    data[num_vars_tibble] <- lapply(data[num_vars_tibble], as.numeric)
+    
+    # handle time variables, convert to middle of time period 
+    time_variables <- c("JWAP", "JWDP", "JWMNP")
+    time_vars_tibble <- intersect(time_variables, names(data))
+    data[time_vars_tibble] <-
+      lapply(data[time_vars_tibble], function(x) {
+        as.numeric(x) / 2
+      })
+  
+  # convert categorical variables to factors
+  cat_vars_tibble <- intersect(categorical_vars, names(data))
+  data[cat_vars_tibble] <- lapply(data[cat_vars_tibble], as.factor)
+  
+  return(data)
+}
+
+
+#testing this 
+test2 <- query_pums(
+  year = 2021,
+  numeric_vars = c("AGEP"),  # Specify numeric variables
+  categorical_vars = c("SEX"),        # Specify categorical variables
+  geography_level = "State",          # Specify geography level
+  geography_filter_value = "state:06" # Filter for California
+)
+```
+
